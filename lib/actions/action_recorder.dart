@@ -57,7 +57,6 @@ class ActionRecorder extends ChangeNotifier {
   Object? error;
   bool _closed = false;
   bool _visible = true;
-  bool _gpsPermissionRequested = false;
   int pending = 0;
   int _generation = 0;
   bool recovered = false;
@@ -821,12 +820,9 @@ class ActionRecorder extends ChangeNotifier {
     if (_closed || !_visible && !running) return;
     _cancelGpsWarmup();
     final revision = _gpsWarmupRevision;
-    // GPS is automatic. Ask through the OS once per recorder opening; later
-    // foreground returns reuse permission without repeatedly prompting denial.
-    // Capture boundaries and durable writes never wait for this permission.
-    final requestPermission = _visible && !_gpsPermissionRequested;
-    if (requestPermission) _gpsPermissionRequested = true;
-    await _sensors.warmUp(requestPermission: requestPermission);
+    // First-launch preparation owns all OS prompts. Warming GPS or resuming a
+    // study only reuses the current grant, including after revocation/denial.
+    await _sensors.warmUp(requestPermission: false);
     if (_closed || revision != _gpsWarmupRevision) return;
     if (!running && _visible) {
       _gpsWarmup = Timer(const Duration(minutes: 1), () {

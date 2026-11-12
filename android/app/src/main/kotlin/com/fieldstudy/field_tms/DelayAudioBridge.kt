@@ -23,9 +23,14 @@ import java.util.concurrent.atomic.AtomicLong
 class DelayAudioBridge(private val activity: Activity, messenger: BinaryMessenger) {
     private val channel = MethodChannel(messenger, "field_tms/delay_audio")
     private val events = EventChannel(messenger, "field_tms/delay_audio_events")
-    private var waiting: Pair<String, MethodChannel.Result>? = null
+    private val playbackEvents = EventChannel(messenger, "field_tms/audio_playback")
+    private var playbackSink: EventChannel.EventSink? = null
     private var player: MediaPlayer? = null
     init {
+        playbackEvents.setStreamHandler(object: EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, sink: EventChannel.EventSink) { playbackSink = sink }
+            override fun onCancel(arguments: Any?) { playbackSink = null }
+        })
         events.setStreamHandler(object: EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, sink: EventChannel.EventSink) { DelayAudioService.listener = { sink.success(it) } }
             override fun onCancel(arguments: Any?) { DelayAudioService.listener = null }
@@ -33,15 +38,16 @@ class DelayAudioBridge(private val activity: Activity, messenger: BinaryMessenge
         channel.setMethodCallHandler { call, result ->
             val file = call.argument<String>("file")
             when (call.method) {
+                "availableFiles" -> {
+                    val files = call.argument<List<String>>("files") ?: emptyList()
+                    result.success(files.take(64).filter { validFile(it) && File(directory(activity), it).let { file -> file.isFile && file.length() > 0 } })
+                }
                 "setTarget" -> {
-                    waiting?.let { it.second.success(mapOf("file" to it.first, "status" to "cancelled")) }
-                    waiting = null
                     player?.release(); player = null
                     if (file != null && !validFile(file)) result.error("file", "Invalid audio note.", null)
                     else if (file == null) DelayAudioService.command(activity, null, result::success)
                     else if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                        waiting = Pair(file, result)
-                        activity.requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST)
+                        result.success(mapOf("file" to file, "status" to "denied"))
                     } else DelayAudioService.command(activity, file, result::success)
                 }
                 "deleteStudy" -> {
@@ -55,14 +61,23 @@ class DelayAudioBridge(private val activity: Activity, messenger: BinaryMessenge
                     }
                 }
                 "play" -> {
-                    if (file == null || !validFile(file) || DelayAudioService.recording) result.error("audio", "Stop recording before playing a note.", null)
+                    if (DelayAudioService.recording) result.error("recording", "End Delay before playing audio notes.", null)
+                    else if (file == null || !validFile(file)) result.error("audio", "This audio note is unavailable.", null)
                     else try {
                         player?.release()
                         player = MediaPlayer().apply {
                             setDataSource(File(directory(activity), file).path)
-                            setOnCompletionListener { it.release(); if (player === it) player = null }
-                            setOnErrorListener { p, _, _ -> p.release(); if (player === p) player = null; true }
-                            setOnPreparedListener { it.start() }
+                            setOnCompletionListener { it.release(); if (player === it) player = null; playbackSink?.success(mapOf("file" to file, "status" to "completed")) }
+                            setOnErrorListener { p, _, _ -> p.release(); if (player === p) player = null; playbackSink?.success(mapOf("file" to file, "status" to "error")); true }
+                            setOnPreparedListener { prepared ->
+                                if (player === prepared) {
+                                    try { prepared.start() }
+                                    catch (_: IllegalStateException) {
+                                        prepared.release(); player = null
+                                        playbackSink?.success(mapOf("file" to file, "status" to "error"))
+                                    }
+                                }
+                            }
                             prepareAsync()
                         }
                         result.success(null)
@@ -73,22 +88,13 @@ class DelayAudioBridge(private val activity: Activity, messenger: BinaryMessenge
             }
         }
     }
-    fun onPermissions(request: Int): Boolean {
-        if (request != REQUEST) return false
-        val pending = waiting ?: return true
-        waiting = null
-        if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) DelayAudioService.command(activity, pending.first, pending.second::success)
-        else pending.second.success(mapOf("file" to pending.first, "status" to "denied"))
-        return true
-    }
     fun dispose() {
-        waiting?.let { it.second.success(mapOf("file" to it.first, "status" to "cancelled")) }; waiting = null
         player?.release(); player = null
         channel.setMethodCallHandler(null)
         events.setStreamHandler(null); DelayAudioService.listener = null
+        playbackEvents.setStreamHandler(null); playbackSink = null
     }
     companion object {
-        private const val REQUEST = 7331
         fun validFile(name: String) = Regex("note-study-[0-9]+-[0-9]+-[0-9]+\\.m4a").matches(name)
         fun directory(context: Context) = File(context.filesDir, "delay-notes").also { it.mkdirs() }
     }

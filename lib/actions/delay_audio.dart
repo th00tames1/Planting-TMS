@@ -10,6 +10,26 @@ class DelayAudio {
       : const EventChannel('field_tms/delay_audio_events')
             .receiveBroadcastStream()
             .map((value) => Map<String, dynamic>.from(value as Map));
+  Stream<Map<String, dynamic>> get playbackEvents => kIsWeb
+      ? const Stream.empty()
+      : const EventChannel('field_tms/audio_playback')
+            .receiveBroadcastStream()
+            .map((value) => Map<String, dynamic>.from(value as Map));
+  Future<Set<String>> availableFiles(Iterable<String> files) async {
+    if (kIsWeb || files.isEmpty) return {};
+    try {
+      return (await channel.invokeListMethod<String>('availableFiles', {
+                'files': files.take(64).toList(),
+              }) ??
+              [])
+          .toSet();
+    } on MissingPluginException {
+      return {};
+    } on PlatformException {
+      return {};
+    }
+  }
+
   Future<Map<String, dynamic>?> setTarget(String? file) async {
     if (kIsWeb) {
       return file == null ? null : {'file': file, 'status': 'unavailable'};

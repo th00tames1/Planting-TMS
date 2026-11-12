@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:field_tms/actions/action_app.dart';
 import 'package:field_tms/actions/action_journal.dart';
+import 'package:field_tms/actions/delay_audio.dart';
 import 'package:field_tms/actions/action_journal_native.dart';
 import 'package:field_tms/actions/saved_records_screen.dart';
 import 'package:field_tms/actions/versioned_action_journal.dart';
@@ -53,6 +54,31 @@ class GatedJournal extends MemoryJournal implements PagedActionJournal {
       eligible,
       nextCursor: more ? '${eligible.last['seq']}' : null,
     );
+  }
+}
+
+class RecordAudio extends DelayAudio {
+  final played = <String>[];
+  final completed = StreamController<Map<String, dynamic>>.broadcast(
+    sync: true,
+  );
+  Set<String> available = {};
+  int stops = 0;
+  Object? playError;
+  @override
+  Stream<Map<String, dynamic>> get playbackEvents => completed.stream;
+  @override
+  Future<Set<String>> availableFiles(Iterable<String> files) async =>
+      files.where(available.contains).toSet();
+  @override
+  Future<void> stopPlayback() async {
+    stops++;
+  }
+
+  @override
+  Future<void> play(String file) async {
+    if (playError != null) throw playError!;
+    played.add(file);
   }
 }
 
@@ -185,34 +211,39 @@ void main() {
   );
 
   testWidgets(
-    'saved records pages all rows, opens CSV values and returns newer',
+    'study selection opens paged timetable minutes and returns newer',
     (tester) async {
       final journal = GatedJournal();
       journal.rows.addAll(List.generate(123, (i) => event(i + 1)));
       await tester.pumpWidget(
         MaterialApp(
-          home: SavedRecordsScreen(journal: journal, maxSequence: 123),
+          home: SavedRecordsScreen(
+            journal: journal,
+            maxSequence: 123,
+            audio: RecordAudio(),
+          ),
         ),
       );
       await pumpCaptureUi(tester);
-      expect(find.byKey(const ValueKey('saved-record-123')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('saved-study-records-test')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('saved-study-records-test')));
+      await pumpCaptureUi(tester);
+      expect(find.byKey(const ValueKey('time-row-123-closed')), findsOneWidget);
+      expect(find.text('Minutes'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('records-older')));
       await pumpCaptureUi(tester);
       expect(find.text('Page 2'), findsOneWidget);
-      expect(find.byKey(const ValueKey('saved-record-73')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('saved-record-73')));
-      await pumpCaptureUi(tester);
-      expect(find.text('Record #73'), findsOneWidget);
-      await tester.ensureVisible(find.text('Decimal minutes'));
-      expect(find.text('0.025000000'), findsOneWidget);
-      await tester.pageBack();
-      await pumpCaptureUi(tester);
+      expect(find.byKey(const ValueKey('time-row-93-closed')), findsOneWidget);
+      expect(find.text('0.02500'), findsWidgets);
       await tester.tap(find.byKey(const ValueKey('records-older')));
       await pumpCaptureUi(tester);
-      expect(find.byKey(const ValueKey('saved-record-23')), findsOneWidget);
+      expect(find.byKey(const ValueKey('time-row-63-closed')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('records-newer')));
       await pumpCaptureUi(tester);
-      expect(find.byKey(const ValueKey('saved-record-73')), findsOneWidget);
+      expect(find.byKey(const ValueKey('time-row-93-closed')), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -268,8 +299,16 @@ void main() {
     final journal = GatedJournal();
     journal.rows.addAll(List.generate(65, (i) => event(i + 1)));
     await tester.pumpWidget(
-      MaterialApp(home: SavedRecordsScreen(journal: journal, maxSequence: 65)),
+      MaterialApp(
+        home: SavedRecordsScreen(
+          journal: journal,
+          maxSequence: 65,
+          audio: RecordAudio(),
+        ),
+      ),
     );
+    await pumpCaptureUi(tester);
+    await tester.tap(find.byKey(const ValueKey('saved-study-records-test')));
     await pumpCaptureUi(tester);
     journal.failRead = true;
     await tester.tap(find.byKey(const ValueKey('records-older')));
@@ -279,7 +318,7 @@ void main() {
     await tester.tap(find.text('Retry'));
     await pumpCaptureUi(tester);
     expect(find.text('Page 2'), findsOneWidget);
-    expect(find.byKey(const ValueKey('saved-record-15')), findsOneWidget);
+    expect(find.byKey(const ValueKey('time-row-35-closed')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -290,10 +329,18 @@ void main() {
     final selection = event(1)..remove('closed');
     journal.rows.add(selection);
     await tester.pumpWidget(
-      MaterialApp(home: SavedRecordsScreen(journal: journal, maxSequence: 1)),
+      MaterialApp(
+        home: SavedRecordsScreen(
+          journal: journal,
+          maxSequence: 1,
+          audio: RecordAudio(),
+        ),
+      ),
     );
     await pumpCaptureUi(tester);
-    expect(find.text('Walking selected'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('saved-study-records-test')));
+    await pumpCaptureUi(tester);
+    expect(find.text('No completed activities yet.'), findsOneWidget);
     expect(find.text('Walking started'), findsNothing);
   });
 }

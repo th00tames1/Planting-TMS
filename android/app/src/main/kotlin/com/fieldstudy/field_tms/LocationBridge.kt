@@ -18,25 +18,13 @@ import java.util.UUID
 class LocationBridge(private val activity: Activity, messenger: BinaryMessenger) : EventChannel.StreamHandler {
     private val methods = MethodChannel(messenger, "field_tms/location")
     private val events = EventChannel(messenger, "field_tms/location_events")
-    private var pending: MethodChannel.Result? = null
-    private var wanted = false
     init {
         events.setStreamHandler(this)
         methods.setMethodCallHandler { call, result ->
             when (call.method) {
                 "clockInfo" -> result.success(mapOf("bootId" to bootId(activity)))
-                "enable" -> {
-                    wanted = true
-                    if (pending != null) result.error("busy", "Location permission is already open.", null)
-                    else if (!hasPermission(activity) && Build.VERSION.SDK_INT >= 23) {
-                        pending = result
-                        activity.requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION), REQUEST)
-                    } else { start(); result.success(LocationRuntime.snapshot) }
-                }
-                "start" -> { wanted = true; start(); result.success(LocationRuntime.snapshot) }
+                "enable", "start" -> { start(); result.success(LocationRuntime.snapshot) }
                 "stop" -> {
-                    wanted = false
                     activity.stopService(Intent(activity, LocationRecordingService::class.java))
                     LocationRuntime.publish(mapOf("status" to "off"))
                     result.success(LocationRuntime.snapshot)
@@ -55,28 +43,17 @@ class LocationBridge(private val activity: Activity, messenger: BinaryMessenger)
             LocationRuntime.publish(mapOf("status" to "waiting"))
         } catch (_: Exception) { LocationRuntime.publish(mapOf("status" to "error")) }
     }
-    fun onPermissions(requestCode: Int): Boolean {
-        if (requestCode != REQUEST) return false
-        val reply = pending
-        pending = null
-        if (wanted && hasPermission(activity)) start() else LocationRuntime.publish(mapOf("status" to if (wanted) "denied" else "off"))
-        reply?.success(LocationRuntime.snapshot)
-        return true
-    }
     override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
         LocationRuntime.sink = sink
         sink.success(LocationRuntime.snapshot)
     }
     override fun onCancel(arguments: Any?) { LocationRuntime.sink = null }
     fun dispose() {
-        pending?.error("closed", "Location permission request was interrupted.", null)
-        pending = null
         LocationRuntime.sink = null
         methods.setMethodCallHandler(null)
         events.setStreamHandler(null)
     }
     companion object {
-        const val REQUEST = 7321
         fun hasPermission(context: Context): Boolean = Build.VERSION.SDK_INT < 23 ||
             context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED

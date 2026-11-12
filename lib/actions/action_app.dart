@@ -9,6 +9,7 @@ import 'capture_time.dart';
 import 'saved_records_screen.dart';
 import 'app_updates.dart';
 import 'appearance.dart';
+import 'capture_permissions.dart';
 
 const _paper = Color(0xFFF5F7F9);
 const _ink = Color(0xFF19232E);
@@ -31,6 +32,18 @@ Color _fieldAccent(BuildContext context) =>
     ? const Color(0xFF9BB8FF)
     : _blue;
 Color _fieldError(BuildContext context) => Theme.of(context).colorScheme.error;
+Color _fieldDisabledInk(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF4F5967)
+    : const Color(0xFFADB5BF);
+Color _fieldDisabledButton(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF141920)
+    : const Color(0xFFEDF0F3);
+Color _fieldDisabledOutline(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF29313D)
+    : const Color(0xFFDFE4EA);
 
 class ActionCaptureApp extends StatelessWidget {
   const ActionCaptureApp({super.key, this.recorder});
@@ -120,6 +133,7 @@ class _CaptureHostState extends State<_CaptureHost>
   Future<void> _open() async {
     ActionRecorder? recorder;
     try {
+      if (widget.recorder == null) await prepareCapturePermissions();
       recorder = widget.recorder ?? ActionRecorder(await openActionJournal());
       recorder.setVisible(!_covered && _lifecycle == AppLifecycleState.resumed);
       await recorder.initialize();
@@ -436,14 +450,6 @@ class _CaptureHostState extends State<_CaptureHost>
       }
       return;
     }
-    if (choice == 'walking' &&
-        (recorder.running ||
-            recorder.pending != 0 ||
-            recorder.error != null ||
-            recorder.needsReview ||
-            exporting)) {
-      return;
-    }
     if (choice == 'csv') {
       await _export();
       return;
@@ -494,10 +500,6 @@ class _CaptureHostState extends State<_CaptureHost>
       }
       return;
     }
-    if (choice == 'walking') {
-      await _visit((_) => _WalkingSettings(recorder: c!));
-      return;
-    }
     if (choice == 'settings') {
       if (exporting || recorder.pending != 0 || _stopping) return;
       await _visit((_) => AppSettings(recorder: recorder));
@@ -509,6 +511,7 @@ class _CaptureHostState extends State<_CaptureHost>
         (_) => SavedRecordsScreen(
           journal: recorder.journal,
           maxSequence: recorder.sequence,
+          audio: recorder.audio,
         ),
       );
     }
@@ -668,16 +671,6 @@ class _CaptureHostState extends State<_CaptureHost>
                 value: 'settings',
                 enabled: !exporting && recorder.pending == 0 && !_editing,
                 child: const Text('Settings'),
-              ),
-              PopupMenuItem(
-                value: 'walking',
-                enabled:
-                    !recorder.running &&
-                    recorder.pending == 0 &&
-                    recorder.error == null &&
-                    !recorder.needsReview &&
-                    !exporting,
-                child: const Text('Walking setup'),
               ),
               PopupMenuItem(
                 value: 'new',
@@ -1160,14 +1153,12 @@ class _ActivityGrid extends StatelessWidget {
         active: delayActive,
         reason: delayReason,
         startMs: delayStartMs,
-        reasonColumns: compactReasons ? 4 : 2,
         enabled: enabled && running && selected != 'Delay',
         onToggle: () => onSelect('Delay'),
         onReason: onReason,
         parent: selected,
         delayCount: activityDelayCount ?? recorder.activityDelayCount,
       );
-      if (delayActive && delayReason == null && enabled) return delay;
       const displayActions = ['Preparation', 'Walk out', 'Planting', 'Walking'];
       return Column(
         children: [
@@ -1250,19 +1241,21 @@ class _ActivityButton extends StatelessWidget {
               ? delay
                     ? const Color(0xFFF1BB43)
                     : _blue
-              : _fieldButton(context),
+              : _fieldDisabledButton(context),
           foregroundColor: selected && !delay
               ? const Color(0xFFFAFCFE)
               : _fieldInk(context),
           disabledForegroundColor: selected && !delay
               ? const Color(0xFFFAFCFE)
-              : _fieldMuted(context),
+              : _fieldDisabledInk(context),
           side: BorderSide(
             color: selected
                 ? delay
                       ? const Color(0xFFB38116)
                       : _blue
-                : _fieldOutline(context),
+                : enabled
+                ? _fieldOutline(context)
+                : _fieldDisabledOutline(context),
             width: selected ? 2 : 1.3,
           ),
           shape: RoundedRectangleBorder(
@@ -1315,7 +1308,7 @@ class _ActivityButton extends StatelessWidget {
                             captureTime(elapsed),
                             key: ValueKey('activity-time-$name'),
                             style: const TextStyle(
-                              fontSize: 28,
+                              fontSize: 22,
                               fontWeight: FontWeight.w600,
                               height: 1.1,
                               fontFeatures: _figures,
@@ -1332,6 +1325,8 @@ class _ActivityButton extends StatelessWidget {
                                 fontFeatures: _figures,
                                 color: selected
                                     ? const Color(0xFFFAFCFE)
+                                    : !enabled
+                                    ? _fieldDisabledInk(context)
                                     : _fieldMuted(context),
                               ),
                             ),
@@ -1363,7 +1358,6 @@ class _DelayControl extends StatelessWidget {
     required this.onReason,
     this.reason,
     this.startMs,
-    this.reasonColumns = 2,
     this.parent,
     this.delayCount = 0,
   });
@@ -1373,7 +1367,6 @@ class _DelayControl extends StatelessWidget {
   final ValueChanged<String> onReason;
   final String? reason;
   final int? startMs;
-  final int reasonColumns;
   final String? parent;
   final int delayCount;
   int? get elapsedMs => startMs != null
@@ -1397,13 +1390,19 @@ class _DelayControl extends StatelessWidget {
                 : _fieldButton(context),
             disabledBackgroundColor: active
                 ? const Color(0xFFF1BB43)
-                : _fieldButton(context),
+                : _fieldDisabledButton(context),
             foregroundColor: active
                 ? const Color(0xFF19232E)
                 : _fieldInk(context),
-            disabledForegroundColor: _fieldMuted(context),
+            disabledForegroundColor: active
+                ? const Color(0xFF19232E)
+                : _fieldDisabledInk(context),
             side: BorderSide(
-              color: active ? const Color(0xFFB38116) : _fieldOutline(context),
+              color: active
+                  ? const Color(0xFFB38116)
+                  : enabled
+                  ? _fieldOutline(context)
+                  : _fieldDisabledOutline(context),
               width: active ? 2 : 1.3,
             ),
             shape: RoundedRectangleBorder(
@@ -1435,7 +1434,7 @@ class _DelayControl extends StatelessWidget {
                     readout: () => Text(
                       captureTime(elapsedMs),
                       style: const TextStyle(
-                        fontSize: 28,
+                        fontSize: 22,
                         fontWeight: FontWeight.w600,
                         height: 1.1,
                         fontFeatures: _figures,
@@ -1453,126 +1452,112 @@ class _DelayControl extends StatelessWidget {
         ),
       );
     }
-    return Column(
-      children: [
-        SizedBox(
-          height: 44,
-          child: TextButton(
-            key: const ValueKey('activity-Delay'),
-            onPressed: onToggle,
-            style: TextButton.styleFrom(
-              padding: EdgeInsets.zero,
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        final columns = bounds.maxHeight >= 104 ? 2 : 4;
+        final dark = Theme.of(context).brightness == Brightness.dark;
+        return Semantics(
+          key: const ValueKey('activity-Delay'),
+          selected: true,
+          explicitChildNodes: true,
+          label:
+              '${parent ?? recorder.action} · Delay $delayCount. Choose a reason',
+          child: DecoratedBox(
+            key: const ValueKey('delay-reason-picker'),
+            decoration: BoxDecoration(
+              color: _fieldButton(context),
+              border: Border.all(color: const Color(0xFFB38116), width: 2),
+              borderRadius: BorderRadius.circular(14),
             ),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Center(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${parent ?? recorder.action} · Delay $delayCount${recorder.audioStatus == 'recording' ? ' · Mic on' : ''}',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color:
-                                (Theme.of(context).brightness == Brightness.dark
-                                ? const Color(0xFFFFCF70)
-                                : const Color(0xFF8B6513)),
-                          ),
-                        ),
-                        _LiveReadout(
-                          recorder: recorder,
-                          live: active,
-                          readout: () => Text(
-                            captureTime(elapsedMs),
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w600,
-                              height: 1.1,
-                              fontFeatures: _figures,
-                              color:
-                                  (Theme.of(context).brightness ==
-                                      Brightness.dark
-                                  ? const Color(0xFFFFCF70)
-                                  : const Color(0xFF8B6513)),
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Column(
+                children: [
+                  for (var row = 0; row < 4 ~/ columns; row++) ...[
+                    if (row > 0) const SizedBox(height: 8),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          for (var col = 0; col < columns; col++) ...[
+                            if (col > 0) const SizedBox(width: 8),
+                            Expanded(
+                              child: Builder(
+                                builder: (context) {
+                                  final reason =
+                                      delayReasons[row * columns + col];
+                                  final label = columns == 2
+                                      ? reason
+                                      : switch (reason) {
+                                          'Operational' => 'Operat.',
+                                          'Mechanical' => 'Mech.',
+                                          'Administrative' => 'Admin.',
+                                          _ => reason,
+                                        };
+                                  return Semantics(
+                                    label: reason,
+                                    button: true,
+                                    excludeSemantics: true,
+                                    onTap: () => onReason(reason),
+                                    child: Tooltip(
+                                      message: reason,
+                                      child: OutlinedButton(
+                                        key: ValueKey('delay-reason-$reason'),
+                                        onPressed: () => onReason(reason),
+                                        style: OutlinedButton.styleFrom(
+                                          animationDuration: Duration.zero,
+                                          backgroundColor: dark
+                                              ? const Color(0xFF332A15)
+                                              : const Color(0xFFFFF1CE),
+                                          foregroundColor: dark
+                                              ? const Color(0xFFFFD489)
+                                              : const Color(0xFF19232E),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                          side: const BorderSide(
+                                            color: Color(0xFFB38116),
+                                          ),
+                                        ),
+                                        child: Center(
+                                          child: FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            child: Text(
+                                              label,
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize: columns == 2
+                                                    ? 22
+                                                    : 18,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Icon(
-                    Icons.stop_rounded,
-                    size: 20,
-                    color: (Theme.of(context).brightness == Brightness.dark
-                        ? const Color(0xFFFFCF70)
-                        : const Color(0xFF8B6513)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        for (
-          var row = 0;
-          row < delayReasons.length ~/ reasonColumns;
-          row++
-        ) ...[
-          if (row > 0) const SizedBox(height: 16),
-          Expanded(
-            child: Row(
-              children: [
-                for (var col = 0; col < reasonColumns; col++) ...[
-                  if (col > 0) const SizedBox(width: 16),
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () =>
-                          onReason(delayReasons[row * reasonColumns + col]),
-                      style: OutlinedButton.styleFrom(
-                        backgroundColor:
-                            Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF332A15)
-                            : const Color(0xFFFFF1CE),
-                        foregroundColor:
-                            Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFFFFD489)
-                            : const Color(0xFF19232E),
-                        minimumSize: Size.zero,
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        side: const BorderSide(color: Color(0xFFB38116)),
-                      ),
-                      child: Center(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            delayReasons[row * reasonColumns + col],
-                            style: const TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
+                          ],
+                        ],
                       ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
-        ],
-      ],
+        );
+      },
     );
   }
 }
@@ -1655,87 +1640,6 @@ class _CaptureAlert extends StatelessWidget {
             ),
           ),
         ),
-      ],
-    ),
-  );
-}
-
-class _WalkingSettings extends StatefulWidget {
-  const _WalkingSettings({required this.recorder});
-  final ActionRecorder recorder;
-  @override
-  State<_WalkingSettings> createState() => _WalkingSettingsState();
-}
-
-class _WalkingSettingsState extends State<_WalkingSettings> {
-  late final length = TextEditingController(
-    text: widget.recorder.walking.stepLengthM?.toStringAsFixed(3),
-  );
-  String? message;
-  bool saving = false;
-  @override
-  void dispose() {
-    length.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Walking setup')),
-    body: ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        const Text(
-          'Observer walking',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Distance uses the phone’s step sensor and a measured step length. It is an estimate of the observer’s movement.',
-        ),
-        const SizedBox(height: 24),
-        TextField(
-          controller: length,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Step length (metres)',
-            border: OutlineInputBorder(),
-            helperText:
-                'Walk a measured distance and divide by your step count.',
-          ),
-        ),
-        const SizedBox(height: 16),
-        FilledButton(
-          onPressed: saving
-              ? null
-              : () async {
-                  final value = double.tryParse(length.text.trim());
-                  if (value == null ||
-                      !value.isFinite ||
-                      value <= 0 ||
-                      value > 5) {
-                    setState(
-                      () => message =
-                          'Enter a step length between 0 and 5 metres.',
-                    );
-                    return;
-                  }
-                  setState(() => saving = true);
-                  final reading = await widget.recorder.setStepLength(value);
-                  if (mounted) {
-                    setState(() {
-                      saving = false;
-                      message = reading.message ?? 'Step length saved.';
-                    });
-                  }
-                },
-          child: const Text('Save step length'),
-        ),
-        if (message != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: Text(message!),
-          ),
       ],
     ),
   );

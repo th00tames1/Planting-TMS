@@ -4,8 +4,10 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 import 'action_journal.dart';
+import 'coordinated_action_journal.dart';
 
-Future<ActionJournal> openActionJournal() => BrowserActionJournal.open();
+Future<ActionJournal> openActionJournal() async =>
+    CoordinatedActionJournal(await BrowserActionJournal.open());
 typedef _Abort = void Function(Object, StackTrace);
 
 /// Activity events only, retaining the existing database, keys and payloads.

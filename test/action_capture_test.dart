@@ -374,7 +374,10 @@ void main() {
       expect(inButton('Planting', '01:00:00.76'), findsOneWidget);
       await c.setDelay(true);
       await tester.pump();
-      expect(find.byKey(const ValueKey('activity-Preparation')), findsNothing);
+      expect(
+        tester.getRect(find.byKey(const ValueKey('activity-Preparation'))),
+        preparationBounds,
+      );
       expect(find.text('Operational'), findsOneWidget);
       await c.chooseDelayReason('Operational');
       clock.now = 3604000;
@@ -417,7 +420,7 @@ void main() {
     },
   );
   test(
-    'automatic GPS permission never delays or backfills a captured boundary',
+    'GPS preparation never asks for permission or backfills captured boundaries',
     () async {
       final journal = MemoryJournal();
       final location = ReadinessLocation(granted: false)
@@ -431,13 +434,14 @@ void main() {
       );
       await c.initialize();
       await Future<void>.delayed(Duration.zero);
-      expect(location.prompts, 1);
+      expect(location.prompts, 0);
       await c.startStop();
       expect(
         journal.rows.single['boundary']['location']['status'],
         'permission_required',
       );
       location.permissionBarrier!.complete();
+      await location.enable(); // Simulate granting access outside capture.
       await c.sensorsSettled;
       expect(location.prompts, 1);
       expect(
@@ -469,11 +473,11 @@ void main() {
       );
       await c.initialize();
       await c.sensorsSettled;
-      expect(location.prompts, 1);
+      expect(location.prompts, 0);
       c.setVisible(false);
       c.setVisible(true);
       await c.sensorsSettled;
-      expect(location.prompts, 1);
+      expect(location.prompts, 0);
       await c.capture('Planting');
       expect(
         journal.rows.single['boundary']['location']['status'],
@@ -488,7 +492,7 @@ void main() {
       c.setVisible(true);
       await c.sensorsSettled;
       expect(location.active, true);
-      expect(location.prompts, 1);
+      expect(location.prompts, 0);
       await c.close();
     },
   );
@@ -597,7 +601,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await pumpCaptureUi(tester);
   });
-  testWidgets('a pending Start cannot open records or calibration', (
+  testWidgets('a pending Start cannot open records or settings', (
     tester,
   ) async {
     final journal = MemoryJournal();
@@ -609,7 +613,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.byTooltip('Study options'));
     await pumpCaptureUi(tester);
-    for (final value in ['walking', 'records']) {
+    for (final value in ['settings', 'records']) {
       final item = tester.widget<PopupMenuItem<String>>(
         find.byWidgetPredicate(
           (widget) => widget is PopupMenuItem<String> && widget.value == value,
@@ -954,7 +958,7 @@ void main() {
         of: find.byKey(ValueKey('activity-$name')),
         matching: find.text('Delays: $value'),
       );
-      expect(find.text('Planting · Delay 1'), findsOneWidget);
+      expect(count('Planting', 1), findsOneWidget);
       expect(c.activityDelayCount, 0);
       j.barrier!.complete();
       await pumpCaptureUi(tester);
@@ -965,7 +969,7 @@ void main() {
       expect(count('Planting', 1), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('activity-Delay')));
       await pumpCaptureUi(tester);
-      expect(find.text('Planting · Delay 2'), findsOneWidget);
+      expect(count('Planting', 2), findsOneWidget);
       await tester.tap(find.text('Personal'));
       await pumpCaptureUi(tester);
       clock.now = 3000;
@@ -1092,6 +1096,13 @@ void main() {
               );
               expect(bounds.left, greaterThanOrEqualTo(0));
               expect(bounds.right, lessThanOrEqualTo(size.width));
+              if (name == 'Delay' &&
+                  find
+                      .byKey(const ValueKey('delay-reason-picker'))
+                      .evaluate()
+                      .isNotEmpty) {
+                continue;
+              }
               expect(
                 (tester
                             .getCenter(
@@ -1134,7 +1145,7 @@ void main() {
           assertFits();
           for (final reason in delayReasons) {
             final bounds = tester.getRect(
-              find.widgetWithText(OutlinedButton, reason),
+              find.byKey(ValueKey('delay-reason-$reason')),
             );
             expect(bounds.top, greaterThanOrEqualTo(0));
             expect(bounds.bottom, lessThanOrEqualTo(size.height - 24));

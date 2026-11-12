@@ -3,6 +3,7 @@ import UIKit
 import CoreLocation
 import Darwin
 import AVFoundation
+import CoreMotion
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -10,12 +11,16 @@ import AVFoundation
   private var exportBridge: ExportBridge?
   private var locationBridge: FieldLocationBridge?
   private var delayAudioBridge: DelayAudioBridge?
+  private var capturePermissionsBridge: CapturePermissionsBridge?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
+    if let registrar = registrar(forPlugin: "FieldCapturePermissions") {
+      capturePermissionsBridge = CapturePermissionsBridge(messenger: registrar.messenger())
+    }
     if let registrar = registrar(forPlugin: "FieldPreferences") {
       FlutterMethodChannel(name: "field_tms/preferences", binaryMessenger: registrar.messenger()).setMethodCallHandler { call, reply in
         switch call.method {
@@ -45,18 +50,74 @@ import AVFoundation
   }
 }
 
+/// First-launch permission preparation does not open a measurement session.
+final class CapturePermissionsBridge: NSObject, CLLocationManagerDelegate {
+  private let channel: FlutterMethodChannel
+  private let location = CLLocationManager()
+  private let pedometer = CMPedometer()
+  private var pending: FlutterResult?
+  private var waitingLocation = false
+  private var authorization: CLAuthorizationStatus {
+    if #available(iOS 14.0, *) { return location.authorizationStatus }
+    return CLLocationManager.authorizationStatus()
+  }
+  init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "field_tms/permissions", binaryMessenger: messenger)
+    super.init()
+    location.delegate = self
+    channel.setMethodCallHandler { [weak self] call, reply in
+      guard let self = self else { reply(nil); return }
+      switch call.method {
+      case "prepare":
+        if self.pending != nil { reply(FlutterError(code: "busy", message: "Permission preparation is already open.", details: nil)); return }
+        if UserDefaults.standard.bool(forKey: "field_permissions_v1") { reply(nil); return }
+        UserDefaults.standard.set(true, forKey: "field_permissions_v1")
+        self.pending = reply
+        if self.authorization == .notDetermined {
+          self.waitingLocation = true
+          self.location.requestWhenInUseAuthorization()
+        } else { self.prepareMicrophone() }
+      case "openSettings":
+        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url, options: [:]) { _ in reply(nil) } }
+        else { reply(nil) }
+      default: reply(FlutterMethodNotImplemented)
+      }
+    }
+  }
+  private func locationPrepared() {
+    guard waitingLocation, authorization != .notDetermined else { return }
+    waitingLocation = false
+    prepareMicrophone()
+  }
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) { locationPrepared() }
+  func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) { locationPrepared() }
+  private func prepareMicrophone() {
+    if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+      AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in DispatchQueue.main.async { self?.prepareMotion() } }
+    } else { prepareMotion() }
+  }
+  private func prepareMotion() {
+    guard CMPedometer.isStepCountingAvailable(), CMPedometer.authorizationStatus() == .notDetermined else { finish(); return }
+    let now = Date()
+    pedometer.queryPedometerData(from: now.addingTimeInterval(-1), to: now) { [weak self] _, _ in
+      DispatchQueue.main.async { self?.finish() }
+    }
+  }
+  private func finish() { let reply = pending; pending = nil; reply?(nil) }
+}
+
 /// Compressed mono audio is encoded directly into one private file per Delay.
-final class DelayAudioBridge: NSObject, AVAudioRecorderDelegate, FlutterStreamHandler {
+final class DelayAudioBridge: NSObject, AVAudioRecorderDelegate, AVAudioPlayerDelegate, FlutterStreamHandler {
   private let methods: FlutterMethodChannel
   private let events: FlutterEventChannel
+  private let playbackEvents: FlutterEventChannel
+  private let playback = FieldPlaybackEvents()
+  private var playbackFile: String?
   private var sink: FlutterEventSink?
   private var recorder: AVAudioRecorder?
   private var player: AVAudioPlayer?
   private var current: String?
   private var started: String?
-  private var wanted: String?
-  private var pending: FlutterResult?
-  private var pendingFile: String?
   private let formatter = ISO8601DateFormatter()
   private var directory: URL {
     let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -66,32 +127,31 @@ final class DelayAudioBridge: NSObject, AVAudioRecorderDelegate, FlutterStreamHa
   init(messenger: FlutterBinaryMessenger) {
     methods = FlutterMethodChannel(name: "field_tms/delay_audio", binaryMessenger: messenger)
     events = FlutterEventChannel(name: "field_tms/delay_audio_events", binaryMessenger: messenger)
+    playbackEvents = FlutterEventChannel(name: "field_tms/audio_playback", binaryMessenger: messenger)
     super.init()
     events.setStreamHandler(self)
+    playbackEvents.setStreamHandler(playback)
     NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: AVAudioSession.interruptionNotification, object: nil)
     methods.setMethodCallHandler { [weak self] call, reply in
       guard let self = self else { reply(nil); return }
       let args = call.arguments as? [String: Any] ?? [:]
       switch call.method {
+      case "availableFiles":
+        let files = args["files"] as? [String] ?? []
+        reply(files.prefix(64).filter { file in
+          guard self.valid(file), let values = try? self.directory.appendingPathComponent(file).resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]) else { return false }
+          return values.isRegularFile == true && (values.fileSize ?? 0) > 0
+        })
       case "setTarget":
         let file = args["file"] as? String
         if let file = file, !self.valid(file) { reply(FlutterError(code: "file", message: "Invalid audio note.", details: nil)); return }
-        self.pending?(["file": self.pendingFile ?? "", "status": "cancelled"])
-        self.pending = nil; self.pendingFile = nil; self.wanted = file
         self.player?.stop(); self.player = nil
         if file == self.current, self.recorder?.isRecording == true {
           reply(["file": file!, "status": "recording", "startedUtc": self.started ?? ""]); return
         }
         let ended = self.finish()
         guard let file = file else { reply(ended ?? ["status": "off"]); return }
-        self.pending = reply; self.pendingFile = file
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-          DispatchQueue.main.async {
-            guard let self = self, self.wanted == file, self.pendingFile == file, let result = self.pending else { return }
-            self.pending = nil; self.pendingFile = nil
-            result(granted ? self.begin(file) : ["file": file, "status": "denied"])
-          }
-        }
+        reply(AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? self.begin(file) : ["file": file, "status": "denied"])
       case "deleteStudy":
         guard let id = args["studyId"] as? String, id.range(of: "^study-[0-9]+-[0-9]+$", options: .regularExpression) != nil, self.recorder == nil else {
           reply(FlutterError(code: "study", message: "Stop recording before Reset.", details: nil)); return
@@ -106,12 +166,14 @@ final class DelayAudioBridge: NSObject, AVAudioRecorderDelegate, FlutterStreamHa
           reply(nil)
         } catch { reply(FlutterError(code: "delete", message: "Some audio notes could not be deleted.", details: nil)) }
       case "play":
-        guard let file = args["file"] as? String, self.valid(file), self.recorder == nil else { reply(FlutterError(code: "audio", message: "Stop recording before playing a note.", details: nil)); return }
+        guard self.recorder == nil else { reply(FlutterError(code: "recording", message: "End Delay before playing audio notes.", details: nil)); return }
+        guard let file = args["file"] as? String, self.valid(file) else { reply(FlutterError(code: "audio", message: "This audio note is unavailable.", details: nil)); return }
         do {
           let session = AVAudioSession.sharedInstance()
           try session.setCategory(.playback); try session.setActive(true)
           self.player?.stop()
           self.player = try AVAudioPlayer(contentsOf: self.directory.appendingPathComponent(file))
+          self.player?.delegate = self; self.playbackFile = file
           guard self.player?.play() == true else { throw NSError(domain: "audio", code: 1) }
           reply(nil)
         } catch { reply(FlutterError(code: "audio", message: "This audio note is unavailable.", details: nil)) }
@@ -158,7 +220,20 @@ final class DelayAudioBridge: NSObject, AVAudioRecorderDelegate, FlutterStreamHa
   func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) { if let result = finish(status: "error") { sink?(result) } }
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? { sink = events; return nil }
   func onCancel(withArguments arguments: Any?) -> FlutterError? { sink = nil; return nil }
+  func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    guard self.player === player else { return }
+    if let file = playbackFile { playback.sink?(["file": file, "status": flag ? "completed" : "error"]) }
+    self.player = nil; playbackFile = nil
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
+  func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) { audioPlayerDidFinishPlaying(player, successfully: false) }
   deinit { NotificationCenter.default.removeObserver(self); _ = finish(status: "interrupted") }
+}
+
+final class FieldPlaybackEvents: NSObject, FlutterStreamHandler {
+  var sink: FlutterEventSink?
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? { sink = events; return nil }
+  func onCancel(withArguments arguments: Any?) -> FlutterError? { sink = nil; return nil }
 }
 
 /// Kept in this compiled source so every Runner configuration includes it.
@@ -198,7 +273,6 @@ final class FieldLocationBridge: NSObject, FlutterStreamHandler, CLLocationManag
         reply(["bootId": "ios-\(boot.tv_sec)-\(boot.tv_usec)"])
       case "enable":
         self.wanted = true
-        if self.authorization == .notDetermined { self.manager.requestWhenInUseAuthorization() }
         self.beginIfAuthorized()
         reply(self.latest)
       case "start": self.wanted = true; self.beginIfAuthorized(); reply(self.latest)

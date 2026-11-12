@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'action_recorder.dart';
 import 'appearance.dart';
+import 'capture_permissions.dart';
 
 const updateRepository = 'th00tames1/Planting-TMS';
 
@@ -118,6 +119,27 @@ class _AppSettingsState extends State<AppSettings> {
               onChanged: (dark) => Appearance.setDark(dark),
             ),
             const SizedBox(height: 16),
+            if (!kIsWeb) ...[
+              OutlinedButton.icon(
+                onPressed: !_busy && stopped
+                    ? () async {
+                        try {
+                          await openCapturePermissionSettings();
+                        } catch (_) {
+                          if (mounted) {
+                            setState(
+                              () => _message =
+                                  'Open app permissions in your phone settings.',
+                            );
+                          }
+                        }
+                      }
+                    : null,
+                icon: const Icon(Icons.privacy_tip_outlined, size: 18),
+                label: const Text('App permissions'),
+              ),
+              const SizedBox(height: 16),
+            ],
             if (_updates.supported && state['supported'] != false) ...[
               SwitchListTile.adaptive(
                 contentPadding: EdgeInsets.zero,

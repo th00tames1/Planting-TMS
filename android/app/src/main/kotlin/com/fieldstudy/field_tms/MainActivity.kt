@@ -1,9 +1,6 @@
 package com.fieldstudy.field_tms
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -18,11 +15,11 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
     private var eventSink: EventChannel.EventSink? = null
     private var resumed = false
     private var pending: StartRequest? = null
-    private var permissionInFlight = false
     private var exportBridge: ExportBridge? = null
     private var locationBridge: LocationBridge? = null
     private var delayAudioBridge: DelayAudioBridge? = null
     private var updateBridge: UpdateBridge? = null
+    private var capturePermissionsBridge: CapturePermissionsBridge? = null
 
     private class StartRequest(
         val sessionId: String,
@@ -47,6 +44,7 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
         locationBridge = LocationBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         delayAudioBridge = DelayAudioBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         updateBridge = UpdateBridge(this, flutterEngine.dartExecutor.binaryMessenger)
+        capturePermissionsBridge = CapturePermissionsBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "field_tms/preferences").setMethodCallHandler { call, result ->
             val preferences = getSharedPreferences("appearance", MODE_PRIVATE)
             when (call.method) {
@@ -91,7 +89,7 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
                                 runtime.start(id, length, hasLength, request.cancelled::get) {
                                     complete(request, it)
                                 }
-                            } else requestPermissionsOrStart(request)
+                            } else startIfPermitted(request)
                         }
                     }
                 }
@@ -125,34 +123,14 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
         }
     }
 
-    private fun requestPermissionsOrStart(request: StartRequest) {
-        if (permissionInFlight) return
-        val permissions = mutableListOf<String>()
-        if (!MotionRuntime.hasMotionPermission(this)) permissions += Manifest.permission.ACTIVITY_RECOGNITION
-        val promptState = getSharedPreferences("field_motion_permissions", MODE_PRIVATE)
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
-            !promptState.getBoolean("notificationAsked", false)) {
-            permissions += Manifest.permission.POST_NOTIFICATIONS
-            promptState.edit().putBoolean("notificationAsked", true).apply()
-        }
-        if (permissions.isEmpty()) startService(request)
-        else {
-            permissionInFlight = true
-            requestPermissions(permissions.toTypedArray(), PERMISSION_REQUEST)
-        }
+    private fun startIfPermitted(request: StartRequest) {
+        if (MotionRuntime.hasMotionPermission(this)) startService(request)
+        else runtime.permissionDenied(request.sessionId, request.length, request.hasLength) { complete(request, it) }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (delayAudioBridge?.onPermissions(requestCode) == true) return
-        if (locationBridge?.onPermissions(requestCode) == true) return
-        if (requestCode != PERMISSION_REQUEST) return
-        permissionInFlight = false
-        val request = pending ?: return
-        if (request.cancelled.get()) return
-        if (MotionRuntime.hasMotionPermission(this)) startService(request)
-        else runtime.permissionDenied(request.sessionId, request.length, request.hasLength) { complete(request, it) }
+        capturePermissionsBridge?.onPermissions(requestCode)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -190,6 +168,7 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
     override fun onPause() { resumed = false; super.onPause() }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        capturePermissionsBridge?.dispose(); capturePermissionsBridge = null
         updateBridge?.dispose(); updateBridge = null
         delayAudioBridge?.dispose()
         delayAudioBridge = null
@@ -210,5 +189,4 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
-    companion object { private const val PERMISSION_REQUEST = 7315 }
 }

@@ -356,8 +356,8 @@ final class MotionBridge: NSObject, FlutterStreamHandler {
     case .denied, .restricted:
       unavailable("permissionDenied", "Allow Motion & Fitness access in Settings.")
       completion(false); return
-    case .notDetermined where !requestPermission:
-      unavailable("error", "Start timing to allow Motion & Fitness access.")
+    case .notDetermined:
+      unavailable("permissionDenied", "Allow Motion & Fitness access in Settings.")
       completion(false); return
     default:
       break
@@ -412,6 +412,7 @@ final class MotionBridge: NSObject, FlutterStreamHandler {
 
   private func startUpdates() {
     guard !streaming, !storageFailed, !needsRestore,
+          CMPedometer.authorizationStatus() == .authorized,
           ledger.running, let anchor = ledger.anchor else { return }
     streaming = true
     let token = generation
