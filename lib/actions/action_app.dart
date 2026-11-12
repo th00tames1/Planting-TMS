@@ -630,6 +630,11 @@ class _CaptureHostState extends State<_CaptureHost>
           ),
         ),
         actions: [
+          if (recorder.delayRunning)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: _AudioStatus(recorder: recorder),
+            ),
           PopupMenuButton<String>(
             tooltip: 'Study options',
             onSelected: _menu,
@@ -1336,10 +1341,12 @@ class _ActivityButton extends StatelessWidget {
                     },
                   ),
                 ],
-                if (delays > 0) ...[
-                  const SizedBox(height: 4),
-                  Text('Delays: $delays', style: const TextStyle(fontSize: 12)),
-                ],
+                const SizedBox(height: 4),
+                Text(
+                  'Delays: $delays',
+                  key: ValueKey('activity-delays-$name'),
+                  style: const TextStyle(fontSize: 12),
+                ),
               ],
             ),
           ),
@@ -1426,7 +1433,6 @@ class _DelayControl extends StatelessWidget {
                       height: 1.15,
                     ),
                   ),
-                  if (active) _AudioStatus(recorder: recorder),
                   const SizedBox(height: 6),
                   _LiveReadout(
                     recorder: recorder,
@@ -1441,10 +1447,8 @@ class _DelayControl extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (label != null) ...[
-                    const SizedBox(height: 3),
-                    Text(label, style: const TextStyle(fontSize: 12)),
-                  ],
+                  const SizedBox(height: 3),
+                  Text(label ?? ' ', style: const TextStyle(fontSize: 12)),
                 ],
               ),
             ),
@@ -1454,7 +1458,8 @@ class _DelayControl extends StatelessWidget {
     }
     return LayoutBuilder(
       builder: (context, bounds) {
-        final columns = bounds.maxHeight >= 104 ? 2 : 4;
+        const columns = 2;
+        final reasonSize = bounds.maxHeight < 104 ? 16.0 : 20.0;
         final dark = Theme.of(context).brightness == Brightness.dark;
         return Semantics(
           key: const ValueKey('activity-Delay'),
@@ -1485,14 +1490,6 @@ class _DelayControl extends StatelessWidget {
                                 builder: (context) {
                                   final reason =
                                       delayReasons[row * columns + col];
-                                  final label = columns == 2
-                                      ? reason
-                                      : switch (reason) {
-                                          'Operational' => 'Operat.',
-                                          'Mechanical' => 'Mech.',
-                                          'Administrative' => 'Admin.',
-                                          _ => reason,
-                                        };
                                   return Semantics(
                                     label: reason,
                                     button: true,
@@ -1530,12 +1527,10 @@ class _DelayControl extends StatelessWidget {
                                           child: FittedBox(
                                             fit: BoxFit.scaleDown,
                                             child: Text(
-                                              label,
+                                              reason,
                                               textAlign: TextAlign.center,
                                               style: TextStyle(
-                                                fontSize: columns == 2
-                                                    ? 22
-                                                    : 18,
+                                                fontSize: reasonSize,
                                                 fontWeight: FontWeight.w600,
                                               ),
                                             ),
@@ -1566,15 +1561,77 @@ class _AudioStatus extends StatelessWidget {
   const _AudioStatus({required this.recorder});
   final ActionRecorder recorder;
   @override
-  Widget build(BuildContext context) => Text(switch (recorder.audioStatus) {
-    'recording' => '● Recording note',
-    'requesting' => 'Microphone permission…',
-    'denied' => 'Microphone permission needed',
-    'unavailable' => 'Audio notes: mobile app only',
-    'interrupted' => 'Audio note interrupted',
-    'error' => 'Audio note unavailable',
-    _ => '',
-  }, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600));
+  Widget build(BuildContext context) {
+    final recording = recorder.audioStatus == 'recording';
+    final starting = recorder.audioStatus == 'requesting';
+    final description = switch (recorder.audioStatus) {
+      'recording' => 'Recording audio note',
+      'requesting' => 'Starting microphone',
+      'denied' => 'Microphone permission needed. Audio is not recording.',
+      'unavailable' => 'Audio notes are available in the mobile app.',
+      'interrupted' => 'Audio note interrupted. Audio is not recording.',
+      _ => 'Audio note unavailable. Audio is not recording.',
+    };
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final ink = recording
+        ? dark
+              ? const Color(0xFFFFA4AC)
+              : const Color(0xFFA21C32)
+        : _fieldMuted(context);
+    return Semantics(
+      key: const ValueKey('audio-status'),
+      label: description,
+      liveRegion: true,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: description,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 112, maxHeight: 28),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: recording
+                    ? dark
+                          ? const Color(0xFF3D2025)
+                          : const Color(0xFFFCE8EC)
+                    : _fieldButton(context),
+                border: Border.all(color: ink),
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      recording ? Icons.mic : Icons.mic_off_outlined,
+                      size: 16,
+                      color: ink,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      recording
+                          ? 'REC'
+                          : starting
+                          ? 'MIC…'
+                          : 'MIC OFF',
+                      style: TextStyle(
+                        color: ink,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        height: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _FitText extends StatelessWidget {

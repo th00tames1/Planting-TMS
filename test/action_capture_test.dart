@@ -8,6 +8,7 @@ import 'package:field_tms/actions/action_app.dart';
 import 'package:field_tms/actions/action_journal.dart';
 import 'package:field_tms/actions/action_journal_native.dart';
 import 'package:field_tms/actions/action_recorder.dart';
+import 'package:field_tms/actions/delay_audio.dart';
 import 'package:field_tms/actions/field_location.dart';
 import 'package:field_tms/clock/capture_clock.dart';
 import 'package:field_tms/motion/motion_tracker.dart';
@@ -164,8 +165,80 @@ ActionRecorder recorder(
   motion: UnavailableMotionTracker(),
 );
 
+class CaptureAudio extends DelayAudio {
+  final start = Completer<Map<String, dynamic>?>();
+  final changes = StreamController<Map<String, dynamic>>.broadcast(sync: true);
+  String? file;
+  @override
+  Stream<Map<String, dynamic>> get events => changes.stream;
+  @override
+  Future<Map<String, dynamic>?> setTarget(String? target) async {
+    file = target;
+    return target == null ? null : start.future;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets(
+    'Delay keeps a two by two picker, stable counts and truthful recording feedback',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 740);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final audio = CaptureAudio();
+      final c = ActionRecorder(
+        MemoryJournal(),
+        clock: TestClock(),
+        location: TestLocation(),
+        motion: UnavailableMotionTracker(),
+        audio: audio,
+      );
+      await tester.pumpWidget(ActionCaptureApp(recorder: c));
+      await pumpCaptureUi(tester);
+      expect(find.text('Delays: 0'), findsNWidgets(4));
+      await tester.tap(find.byKey(const ValueKey('activity-Planting')));
+      await pumpCaptureUi(tester);
+      final plantingLabel = find.descendant(
+        of: find.byKey(const ValueKey('activity-Planting')),
+        matching: find.text('Planting'),
+      );
+      final before = tester.getRect(plantingLabel);
+      await tester.tap(find.byKey(const ValueKey('activity-Delay')));
+      await pumpCaptureUi(tester);
+      expect(tester.getRect(plantingLabel), before);
+      expect(find.text('Delays: 1'), findsOneWidget);
+      expect(find.text('REC'), findsNothing);
+      expect(find.text('MIC…'), findsOneWidget);
+      Rect reason(String name) =>
+          tester.getRect(find.byKey(ValueKey('delay-reason-$name')));
+      expect(reason('Personal').top, reason('Operational').top);
+      expect(reason('Mechanical').top, reason('Administrative').top);
+      expect(reason('Mechanical').top, greaterThan(reason('Personal').bottom));
+      expect(reason('Personal').left, reason('Mechanical').left);
+      expect(reason('Operational').left, reason('Administrative').left);
+      audio.start.complete({'file': audio.file, 'status': 'recording'});
+      await pumpCaptureUi(tester);
+      expect(find.text('REC'), findsOneWidget);
+      expect(find.byKey(const ValueKey('delay-reason-picker')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('delay-reason-Personal')));
+      await pumpCaptureUi(tester);
+      expect(find.text('REC'), findsOneWidget);
+      expect(tester.getRect(plantingLabel), before);
+      audio.changes.add({'file': audio.file, 'status': 'interrupted'});
+      await pumpCaptureUi(tester);
+      expect(find.text('REC'), findsNothing);
+      expect(find.text('MIC OFF'), findsOneWidget);
+      expect(c.delayRunning, true);
+      await c.stop();
+      await pumpCaptureUi(tester);
+      expect(find.byKey(const ValueKey('audio-status')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      await audio.changes.close();
+    },
+  );
   testWidgets(
     'activity background responds before save and rolls back on failure',
     (tester) async {
@@ -1149,8 +1222,22 @@ void main() {
             );
             expect(bounds.top, greaterThanOrEqualTo(0));
             expect(bounds.bottom, lessThanOrEqualTo(size.height - 24));
-            expect(bounds.height, greaterThanOrEqualTo(44));
+            final cell = tester.getRect(
+              find.byKey(const ValueKey('activity-Delay')),
+            );
+            expect(bounds.height, closeTo((cell.height - 16) / 2, 1));
           }
+          final personal = tester.getRect(
+            find.byKey(const ValueKey('delay-reason-Personal')),
+          );
+          final operational = tester.getRect(
+            find.byKey(const ValueKey('delay-reason-Operational')),
+          );
+          final mechanical = tester.getRect(
+            find.byKey(const ValueKey('delay-reason-Mechanical')),
+          );
+          expect(personal.top, operational.top);
+          expect(mechanical.top, greaterThan(personal.bottom));
           await c.chooseDelayReason('Administrative');
           await tester.pump();
           assertFits();
