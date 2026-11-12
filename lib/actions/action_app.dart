@@ -1173,7 +1173,6 @@ class _ActivityGrid extends StatelessWidget {
         children: [
           for (var row = 0; row < 4 ~/ columns; row++) ...[
             Expanded(
-              flex: columns == 2 && row == 1 ? 4 : 3,
               child: Row(
                 children: [
                   for (var col = 0; col < columns; col++) ...[
@@ -1203,7 +1202,7 @@ class _ActivityGrid extends StatelessWidget {
             ),
             SizedBox(height: gap),
           ],
-          Expanded(flex: 3, child: delay),
+          Expanded(child: delay),
         ],
       );
     },
