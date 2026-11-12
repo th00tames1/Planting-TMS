@@ -1,0 +1,54 @@
+[
+  {
+    "mode": "stream",
+    "records": 10000,
+    "annotations": 2000,
+    "format": "csv",
+    "elapsedMs": 454,
+    "startRssBytes": 186757120,
+    "endRssBytes": 198275072,
+    "peakRssBytes": 203411456,
+    "outputBytes": 9426535,
+    "error": null,
+    "maxPageRows": 200
+  },
+  {
+    "mode": "stream",
+    "records": 10000,
+    "annotations": 2000,
+    "format": "xlsx",
+    "elapsedMs": 1420,
+    "startRssBytes": 199557120,
+    "endRssBytes": 200486912,
+    "peakRssBytes": 214622208,
+    "outputBytes": 29063503,
+    "error": null,
+    "maxPageRows": 200
+  },
+  {
+    "mode": "stream",
+    "records": 30000,
+    "annotations": 6000,
+    "format": "csv",
+    "elapsedMs": 1207,
+    "startRssBytes": 205758464,
+    "endRssBytes": 200368128,
+    "peakRssBytes": 214671360,
+    "outputBytes": 28401984,
+    "error": null,
+    "maxPageRows": 200
+  },
+  {
+    "mode": "stream",
+    "records": 30000,
+    "annotations": 6000,
+    "format": "xlsx",
+    "elapsedMs": 4136,
+    "startRssBytes": 184053760,
+    "endRssBytes": 221945856,
+    "peakRssBytes": 225411072,
+    "outputBytes": 88077870,
+    "error": null,
+    "maxPageRows": 200
+  }
+]

@@ -1,0 +1,54 @@
+[
+  {
+    "mode": "build",
+    "records": 10000,
+    "annotations": 2000,
+    "format": "csv",
+    "elapsedMs": 442,
+    "startRssBytes": 180891648,
+    "endRssBytes": 240197632,
+    "peakRssBytes": 240197632,
+    "outputBytes": 9426535,
+    "error": null,
+    "maxPageRows": 200
+  },
+  {
+    "mode": "build",
+    "records": 10000,
+    "annotations": 2000,
+    "format": "xlsx",
+    "elapsedMs": 1137,
+    "startRssBytes": 179707904,
+    "endRssBytes": 306864128,
+    "peakRssBytes": 306864128,
+    "outputBytes": 29063429,
+    "error": null,
+    "maxPageRows": 200
+  },
+  {
+    "mode": "build",
+    "records": 30000,
+    "annotations": 6000,
+    "format": "csv",
+    "elapsedMs": 1140,
+    "startRssBytes": 179929088,
+    "endRssBytes": 275677184,
+    "peakRssBytes": 275677184,
+    "outputBytes": 28401984,
+    "error": null,
+    "maxPageRows": 200
+  },
+  {
+    "mode": "build",
+    "records": 30000,
+    "annotations": 6000,
+    "format": "xlsx",
+    "elapsedMs": 1088,
+    "startRssBytes": 179445760,
+    "endRssBytes": 249425920,
+    "peakRssBytes": 250679296,
+    "outputBytes": null,
+    "error": "Export exceeds the 32 MB size limit.",
+    "maxPageRows": 200
+  }
+]
