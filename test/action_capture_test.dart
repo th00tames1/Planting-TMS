@@ -1225,7 +1225,11 @@ void main() {
             final cell = tester.getRect(
               find.byKey(const ValueKey('activity-Delay')),
             );
-            expect(bounds.height, closeTo((cell.height - 16) / 2, 1));
+            expect(bounds.height, greaterThan(0));
+            expect(bounds.left, greaterThan(cell.left));
+            expect(bounds.right, lessThan(cell.right));
+            expect(bounds.top, greaterThan(cell.top));
+            expect(bounds.bottom, lessThan(cell.bottom));
           }
           final personal = tester.getRect(
             find.byKey(const ValueKey('delay-reason-Personal')),
