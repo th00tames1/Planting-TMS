@@ -1371,14 +1371,14 @@ class _ActivityButton extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             SizedBox(
-                              height: textScaler.scale(22) * 1.1,
+                              height: textScaler.scale(20) * 1.1,
                               child: FittedBox(
                                 fit: BoxFit.scaleDown,
                                 child: Text(
                                   captureTime(elapsed),
                                   key: ValueKey('activity-time-$name'),
                                   style: const TextStyle(
-                                    fontSize: 22,
+                                    fontSize: 20,
                                     fontWeight: FontWeight.w600,
                                     height: 1.1,
                                     fontFeatures: _figures,
@@ -1388,14 +1388,14 @@ class _ActivityButton extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             SizedBox(
-                              height: textScaler.scale(14) * 1.2,
+                              height: textScaler.scale(12) * 1.2,
                               child: FittedBox(
                                 fit: BoxFit.scaleDown,
                                 child: Text(
                                   'Total ${captureTime(total)}',
                                   key: ValueKey('activity-total-$name'),
                                   style: TextStyle(
-                                    fontSize: 14,
+                                    fontSize: 12,
                                     height: 1.2,
                                     fontFeatures: _figures,
                                     color: selected
@@ -1416,7 +1416,7 @@ class _ActivityButton extends StatelessWidget {
                   Text(
                     'Delays: $delays',
                     key: ValueKey('activity-delays-$name'),
-                    style: const TextStyle(fontSize: 12),
+                    style: const TextStyle(fontSize: 11),
                   ),
                 ],
               ),
@@ -1512,7 +1512,7 @@ class _DelayControl extends StatelessWidget {
                     readout: () => Text(
                       captureTime(elapsedMs),
                       style: const TextStyle(
-                        fontSize: 22,
+                        fontSize: 20,
                         fontWeight: FontWeight.w600,
                         height: 1.1,
                         fontFeatures: _figures,
@@ -1520,7 +1520,7 @@ class _DelayControl extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 3),
-                  Text(label ?? ' ', style: const TextStyle(fontSize: 12)),
+                  Text(label ?? ' ', style: const TextStyle(fontSize: 11)),
                 ],
               ),
             ),
