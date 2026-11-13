@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
@@ -108,6 +109,8 @@ class _CaptureHostState extends State<_CaptureHost>
   int? _pressedActionStartMs;
   int? _pressedActivityDelayCount;
   int? _pressedCycle;
+  int? _pressedClosedRecords;
+  int _recordRevision = 0;
   _CaptureLap? _pressedPreviousLap;
   Map<String, int?>? _pressedTotalsAtStart;
   int _countRevision = 0;
@@ -203,6 +206,10 @@ class _CaptureHostState extends State<_CaptureHost>
     final recorder = c!;
     if (name == 'Delay') {
       final requested = !(_pressedDelay ?? recorder.delayRunning);
+      final recordRevision = ++_recordRevision;
+      final closedRecords =
+          (_pressedClosedRecords ?? recorder.count + recorder.delayCount) +
+          (requested ? 0 : 1);
       final revision = ++_delayRevision;
       final countRevision = requested ? ++_countRevision : _countRevision;
       final delayCount =
@@ -213,10 +220,14 @@ class _CaptureHostState extends State<_CaptureHost>
         _pressedDelay = requested;
         _pressedDelayStartMs = requested ? recorder.clock.monotonicMs : null;
         _pressedReason = null;
+        _pressedClosedRecords = closedRecords;
         if (requested) _pressedActivityDelayCount = delayCount;
       });
       unawaited(
         save.whenComplete(() {
+          if (mounted && recordRevision == _recordRevision) {
+            setState(() => _pressedClosedRecords = null);
+          }
           if (mounted && revision == _delayRevision) {
             setState(() {
               _pressedDelay = null;
@@ -235,6 +246,8 @@ class _CaptureHostState extends State<_CaptureHost>
     final previousAction =
         _pressedActivity ?? (recorder.running ? recorder.action : null);
     final previousIsDelay = _pressedDelay ?? recorder.delayRunning;
+    final closedBefore =
+        _pressedClosedRecords ?? recorder.count + recorder.delayCount;
     final previousMs = previousIsDelay
         ? _pressedDelayStartMs == null
               ? recorder.delayMs
@@ -245,6 +258,7 @@ class _CaptureHostState extends State<_CaptureHost>
     final previousLap = switching && previousAction != null
         ? _CaptureLap(
             id: 'outgoing',
+            number: closedBefore + 1,
             action: previousIsDelay ? 'Delay' : previousAction,
             reason: previousIsDelay
                 ? _pressedReason ?? recorder.delayReason
@@ -265,7 +279,7 @@ class _CaptureHostState extends State<_CaptureHost>
         : _pressedActionStartMs;
     final totalsAtStart = switching || starting
         ? {
-            for (final activity in const ['Planting', 'Walking'])
+            for (final activity in fieldActions.take(4))
               activity: _previewTotal(activity),
           }
         : _pressedTotalsAtStart;
@@ -275,18 +289,26 @@ class _CaptureHostState extends State<_CaptureHost>
       _pressedReason = null;
     }
     final revision = ++_selectionRevision;
+    final recordRevision = ++_recordRevision;
+    final closedRecords =
+        closedBefore +
+        (switching && previousAction != null ? (previousIsDelay ? 2 : 1) : 0);
     final save = recorder.capture(name);
     setState(() {
       _pressedActivity = name;
       _pressedActionStartMs = startMs;
       _pressedActivityDelayCount = counter;
       _pressedCycle = cycle;
+      _pressedClosedRecords = closedRecords;
       _pressedPreviousLap = previousLap;
       _pressedTotalsAtStart = totalsAtStart;
       if (switching) _pressedDelay = false;
     });
     unawaited(
       save.whenComplete(() {
+        if (mounted && recordRevision == _recordRevision) {
+          setState(() => _pressedClosedRecords = null);
+        }
         if (mounted && revision == _selectionRevision) {
           setState(() {
             _pressedActivity = null;
@@ -697,6 +719,8 @@ class _CaptureHostState extends State<_CaptureHost>
           enabled: enabled,
           running: running,
           cycle: _pressedCycle ?? recorder.cycle,
+          closedRecords:
+              _pressedClosedRecords ?? recorder.count + recorder.delayCount,
           previousLap: _pressedPreviousLap,
           selected: running ? _pressedActivity ?? recorder.action : null,
           actionStartMs: _pressedActionStartMs,
@@ -721,6 +745,7 @@ class _CapturePanel extends StatelessWidget {
     required this.enabled,
     required this.running,
     required this.cycle,
+    required this.closedRecords,
     required this.selected,
     required this.onSelect,
     required this.delayActive,
@@ -734,7 +759,7 @@ class _CapturePanel extends StatelessWidget {
   });
   final ActionRecorder recorder;
   final bool enabled, running;
-  final int cycle;
+  final int cycle, closedRecords;
   final _CaptureLap? previousLap;
   final String? selected, delayReason;
   final int? actionStartMs, delayStartMs;
@@ -748,11 +773,23 @@ class _CapturePanel extends StatelessWidget {
     builder: (context, viewport) {
       final compact = viewport.maxHeight < 600;
       final gap = compact ? 16.0 : 20.0;
-      final bottomHeight =
-          (MediaQuery.sizeOf(context).height / 2 -
-                  MediaQueryData.fromView(View.of(context)).padding.bottom -
-                  (compact ? 8 : 12))
-              .clamp(0.0, viewport.maxHeight * .75);
+      final screenHeight = MediaQuery.sizeOf(context).height;
+      final halfHeight =
+          screenHeight / 2 -
+          MediaQueryData.fromView(View.of(context)).padding.bottom -
+          (compact ? 8 : 12);
+      final rows =
+          viewport.maxHeight < 320 &&
+              MediaQuery.orientationOf(context) == Orientation.landscape
+          ? 2
+          : 3;
+      final preferredHeight = rows * 124.0 + (rows - 1) * gap;
+      final bottomHeight = math
+          .max(
+            halfHeight,
+            math.min(preferredHeight, halfHeight + screenHeight * .08),
+          )
+          .clamp(0.0, viewport.maxHeight * .75);
       final alert = recorder.needsReview
           ? _CaptureAlert(
               text: 'Interrupted.\nDuration is unknown.',
@@ -785,6 +822,7 @@ class _CapturePanel extends StatelessWidget {
         if (running && delayActive)
           _CaptureLap(
             id: 'current-delay',
+            number: closedRecords + 2,
             action: 'Delay',
             reason: delayReason,
             cycle: selected == 'Planting' || selected == 'Walking'
@@ -800,6 +838,7 @@ class _CapturePanel extends StatelessWidget {
         if (running && selected != null)
           _CaptureLap(
             id: 'current-activity',
+            number: closedRecords + 1,
             action: selected!,
             cycle: selected == 'Planting' || selected == 'Walking'
                 ? cycle
@@ -913,7 +952,7 @@ class _DigitalTime extends StatelessWidget {
     builder: (context, bounds) {
       final scale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
       final clockHeight = (bounds.maxWidth * .24).clamp(54.0, 112.0);
-      final rowHeight = 32.0 * scale;
+      final rowHeight = 28.0 * scale;
       final capacity = ((bounds.maxHeight - clockHeight - 44) / rowHeight)
           .floor()
           .clamp(2, 12);
@@ -1003,13 +1042,14 @@ class _DigitalTime extends StatelessWidget {
                 for (final lap in laps.take(capacity))
                   Padding(
                     key: ValueKey('recent-interval-${lap.id}'),
-                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    padding: const EdgeInsets.symmetric(vertical: 2),
                     child: Row(
                       children: [
                         Text(
                           lap.number == null
-                              ? '•'
+                              ? '—'
                               : '${lap.number}'.padLeft(2, '0'),
+                          key: ValueKey('recent-number-${lap.id}'),
                           style: TextStyle(
                             fontSize: 14,
                             color: _fieldMuted(context),
@@ -1031,7 +1071,7 @@ class _DigitalTime extends StatelessWidget {
                                   key: ValueKey('recent-label-${lap.id}'),
                                   maxLines: 1,
                                   style: TextStyle(
-                                    fontSize: 18,
+                                    fontSize: 17,
                                     fontWeight: lap.live
                                         ? FontWeight.w600
                                         : FontWeight.w500,
@@ -1052,7 +1092,7 @@ class _DigitalTime extends StatelessWidget {
                                     key: ValueKey('recent-cycle-${lap.id}'),
                                     maxLines: 1,
                                     style: TextStyle(
-                                      fontSize: 14,
+                                      fontSize: 13,
                                       fontWeight: FontWeight.w500,
                                       color: _fieldMuted(context),
                                     ),
@@ -1076,7 +1116,7 @@ class _DigitalTime extends StatelessWidget {
                                   captureTime(lap.elapsed()),
                                   key: ValueKey('recent-time-${lap.id}'),
                                   style: const TextStyle(
-                                    fontSize: 22,
+                                    fontSize: 20,
                                     fontWeight: FontWeight.w600,
                                     fontFeatures: _figures,
                                   ),
@@ -1145,6 +1185,20 @@ class _ActivityGrid extends StatelessWidget {
           bounds.maxHeight < 320 &&
           MediaQuery.orientationOf(context) == Orientation.landscape;
       final columns = compactReasons ? 4 : 2;
+      final labelMeasure = TextPainter(
+        text: TextSpan(
+          text: 'Preparation',
+          style: Theme.of(context).textTheme.labelLarge!.copyWith(
+            fontSize: 26,
+            fontWeight: FontWeight.w600,
+            height: 1.15,
+          ),
+        ),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      final contentWidth = labelMeasure.width.ceilToDouble();
+      labelMeasure.dispose();
       final returning = running && selected == 'Walk out';
       bool allowed(String name) =>
           enabled &&
@@ -1177,6 +1231,7 @@ class _ActivityGrid extends StatelessWidget {
                       child: _ActivityButton(
                         recorder: recorder,
                         name: displayActions[row * columns + col],
+                        contentWidth: contentWidth,
                         selected:
                             selected == displayActions[row * columns + col],
                         running: running,
@@ -1209,6 +1264,7 @@ class _ActivityButton extends StatelessWidget {
   const _ActivityButton({
     required this.recorder,
     required this.name,
+    required this.contentWidth,
     required this.selected,
     required this.running,
     required this.enabled,
@@ -1219,6 +1275,7 @@ class _ActivityButton extends StatelessWidget {
   });
   final ActionRecorder recorder;
   final String name;
+  final double contentWidth;
   final bool selected, enabled, running;
   final ValueChanged<String> onSelect;
   final int? startMs;
@@ -1228,6 +1285,7 @@ class _ActivityButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final delay = name == 'Delay';
     final paired = name == 'Planting' || name == 'Walking';
+    final textScaler = MediaQuery.textScalerOf(context);
     final delays = delayCountOverride ?? recorder.displayDelayCount(name);
     return Semantics(
       selected: selected,
@@ -1274,80 +1332,94 @@ class _ActivityButton extends StatelessWidget {
         child: Center(
           child: FittedBox(
             fit: BoxFit.scaleDown,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  name,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w600,
-                    height: 1.15,
+            child: SizedBox(
+              width: contentWidth,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600,
+                      height: 1.15,
+                    ),
                   ),
-                ),
-                ...[
-                  const SizedBox(height: 6),
-                  _LiveReadout(
-                    recorder: recorder,
-                    live: selected && running,
-                    readout: () {
-                      final elapsed = paired && (!running || !selected)
-                          ? 0
-                          : startMs == null
-                          ? recorder.displayMs(name)
-                          : recorder.clock.monotonicMs - startMs!;
-                      final frozenTotal = totalsAtStart?[name];
-                      final total = totalsAtStart == null
-                          ? recorder.cumulativeActivityMs(name)
-                          : frozenTotal == null
-                          ? null
-                          : frozenTotal +
-                                (selected && running && startMs != null
-                                    ? recorder.clock.monotonicMs - startMs!
-                                    : 0);
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            captureTime(elapsed),
-                            key: ValueKey('activity-time-$name'),
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w600,
-                              height: 1.1,
-                              fontFeatures: _figures,
+                  ...[
+                    const SizedBox(height: 6),
+                    _LiveReadout(
+                      recorder: recorder,
+                      live: selected && running,
+                      readout: () {
+                        final elapsed = paired && (!running || !selected)
+                            ? 0
+                            : startMs == null
+                            ? recorder.displayMs(name)
+                            : recorder.clock.monotonicMs - startMs!;
+                        final frozenTotal = totalsAtStart?[name];
+                        final total = totalsAtStart == null
+                            ? recorder.cumulativeActivityMs(name)
+                            : frozenTotal == null
+                            ? null
+                            : frozenTotal +
+                                  (selected && running && startMs != null
+                                      ? recorder.clock.monotonicMs - startMs!
+                                      : 0);
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              height: textScaler.scale(22) * 1.1,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  captureTime(elapsed),
+                                  key: ValueKey('activity-time-$name'),
+                                  style: const TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.1,
+                                    fontFeatures: _figures,
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
-                          if (paired) ...[
                             const SizedBox(height: 4),
-                            Text(
-                              'Total ${captureTime(total)}',
-                              key: ValueKey('activity-total-$name'),
-                              style: TextStyle(
-                                fontSize: 14,
-                                height: 1.2,
-                                fontFeatures: _figures,
-                                color: selected
-                                    ? const Color(0xFFFAFCFE)
-                                    : !enabled
-                                    ? _fieldDisabledInk(context)
-                                    : _fieldMuted(context),
+                            SizedBox(
+                              height: textScaler.scale(14) * 1.2,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  'Total ${captureTime(total)}',
+                                  key: ValueKey('activity-total-$name'),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    height: 1.2,
+                                    fontFeatures: _figures,
+                                    color: selected
+                                        ? const Color(0xFFFAFCFE)
+                                        : !enabled
+                                        ? _fieldDisabledInk(context)
+                                        : _fieldMuted(context),
+                                  ),
+                                ),
                               ),
                             ),
                           ],
-                        ],
-                      );
-                    },
+                        );
+                      },
+                    ),
+                  ],
+                  const SizedBox(height: 4),
+                  Text(
+                    'Delays: $delays',
+                    key: ValueKey('activity-delays-$name'),
+                    style: const TextStyle(fontSize: 12),
                   ),
                 ],
-                const SizedBox(height: 4),
-                Text(
-                  'Delays: $delays',
-                  key: ValueKey('activity-delays-$name'),
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
+              ),
             ),
           ),
         ),

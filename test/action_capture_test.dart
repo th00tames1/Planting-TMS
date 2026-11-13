@@ -181,6 +181,94 @@ class CaptureAudio extends DelayAudio {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
+    'all base buttons share label size and totals remain correct through pending switches',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 740);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final journal = MemoryJournal();
+      final clock = TestClock();
+      final c = recorder(journal, clock);
+      await tester.pumpWidget(ActionCaptureApp(recorder: c));
+      await pumpCaptureUi(tester);
+      Finder label(String name) => find.descendant(
+        of: find.byKey(ValueKey('activity-$name')),
+        matching: find.text(name),
+      );
+      Finder total(String name) => find.byKey(ValueKey('activity-total-$name'));
+      void assertEqualButtons() {
+        final reference = tester.getRect(label('Preparation'));
+        final height = tester
+            .getSize(find.byKey(const ValueKey('activity-Preparation')))
+            .height;
+        for (final name in fieldActions.take(4)) {
+          expect(
+            tester.getRect(label(name)).height,
+            closeTo(reference.height, .01),
+          );
+          expect(
+            tester.getSize(find.byKey(ValueKey('activity-$name'))).height,
+            closeTo(height, .01),
+          );
+          expect(total(name), findsOneWidget);
+        }
+        expect(
+          tester.getSize(find.byKey(const ValueKey('activity-Delay'))).height,
+          closeTo(height, .01),
+        );
+      }
+
+      String currentNumber() => tester
+          .widget<Text>(
+            find.byKey(const ValueKey('recent-number-current-activity')),
+          )
+          .data!;
+      assertEqualButtons();
+      await tester.tap(find.byKey(const ValueKey('activity-Walk out')));
+      await pumpCaptureUi(tester);
+      expect(currentNumber(), '01');
+      clock.now = 3000;
+      journal.barrier = Completer<void>();
+      await tester.tap(find.byKey(const ValueKey('activity-Preparation')));
+      await tester.pump();
+      expect(currentNumber(), '02');
+      expect(tester.widget<Text>(total('Walk out')).data, 'Total 00:02.00');
+      expect(tester.widget<Text>(total('Preparation')).data, 'Total 00:00.00');
+      clock.now = 4000;
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(tester.widget<Text>(total('Preparation')).data, 'Total 00:01.00');
+      expect(tester.widget<Text>(total('Walk out')).data, 'Total 00:02.00');
+      assertEqualButtons();
+      journal.barrier!.complete();
+      await pumpCaptureUi(tester);
+      clock.now = 5000;
+      await tester.tap(find.byKey(const ValueKey('activity-Walk out')));
+      await pumpCaptureUi(tester);
+      clock.now = 6000;
+      await tester.tap(find.byKey(const ValueKey('activity-Planting')));
+      await pumpCaptureUi(tester);
+      expect(currentNumber(), '04');
+      expect(tester.widget<Text>(total('Preparation')).data, 'Total 00:02.00');
+      expect(tester.widget<Text>(total('Walk out')).data, 'Total 00:03.00');
+      assertEqualButtons();
+      await tester.tap(find.byKey(const ValueKey('activity-Delay')));
+      await pumpCaptureUi(tester);
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('recent-number-current-delay')),
+            )
+            .data,
+        '05',
+      );
+      expect(find.text('•'), findsNothing);
+      await c.stop();
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    },
+  );
+  testWidgets(
     'Delay keeps a two by two picker, stable counts and truthful recording feedback',
     (tester) async {
       tester.view.devicePixelRatio = 1;
@@ -1159,7 +1247,7 @@ void main() {
               final bounds = tester.getRect(target);
               expect(
                 bounds.top,
-                greaterThanOrEqualTo(size.height / 2),
+                greaterThanOrEqualTo(size.height * .42 - .01),
                 reason: '$size at $scale, $name',
               );
               expect(
